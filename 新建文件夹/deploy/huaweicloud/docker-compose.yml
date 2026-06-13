@@ -1,0 +1,12 @@
+services:
+  feishu-ws-bot:
+    build:
+      context: ../..
+      dockerfile: deploy/huaweicloud/Dockerfile
+    restart: unless-stopped
+    environment:
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FETCH_CHAT_INFO: ${FETCH_CHAT_INFO:-true}
+      ENV: huaweicloud

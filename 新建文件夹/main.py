@@ -1,0 +1,68 @@
+import logging
+
+import lark_oapi as lark
+from lark_oapi.ws import Client as WsClient
+
+from feishu_bot.config import Settings
+from feishu_bot.handlers import build_message_handler
+
+
+def setup_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level, logging.INFO),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+
+def main() -> None:
+    settings = Settings.from_env()
+    setup_logging(settings.log_level)
+    logger = logging.getLogger("feishu_ws_bot")
+    lark_log_level = getattr(lark.LogLevel, settings.log_level, lark.LogLevel.INFO)
+
+    api_client = (
+        lark.Client.builder()
+        .app_id(settings.app_id)
+        .app_secret(settings.app_secret)
+        .log_level(lark_log_level)
+        .build()
+    )
+
+    # 注意：builder 的前两个参数分别是 encrypt_key 和 verification_token。
+    # 使用 WebSocket 长连接时一般填空字符串即可；第三个参数是日志等级。
+    event_handler = (
+        lark.EventDispatcherHandler.builder("", "", lark_log_level)
+        .register_p2_im_message_receive_v1(
+            build_message_handler(
+                api_client,
+                app_id=settings.app_id,
+                app_secret=settings.app_secret,
+                fetch_chat_info=settings.fetch_chat_info,
+                download_pdf=settings.download_pdf,
+                download_image=settings.download_image,
+                download_dir=settings.download_dir,
+                classify_keywords=settings.classify_keywords,
+                classify_subdir=settings.classify_subdir,
+                aistock_api_url=settings.aistock_api_url,
+                internal_token=settings.internal_token,
+                monitor_chat_name=settings.monitor_chat_name,
+            )
+        )
+        .build()
+    )
+
+    logger.info("启动飞书长连接机器人，ENV=%s", settings.env)
+    logger.info("请确保开放平台已选择：事件与回调 -> 使用长连接接收事件，并订阅 im.message.receive_v1")
+
+    ws_client = WsClient(
+        settings.app_id,
+        settings.app_secret,
+        event_handler=event_handler,
+        log_level=lark_log_level,
+    )
+    # start() 会阻塞主线程；连接成功后控制台会出现 connected to wss://...
+    ws_client.start()
+
+
+if __name__ == "__main__":
+    main()
