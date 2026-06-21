@@ -62,6 +62,35 @@ def main() -> None:
     watchdog_thread.start()
     logger.info("看门狗线程已启动")
 
+    # ===== 启动时拉取最近3天的历史消息 =====
+    try:
+        from feishu_bot.history_fetcher import fetch_and_push_history
+
+        # 获取机器人所在的群列表
+        from lark_oapi.api.im_v1 import ListUserGroupRequest
+        group_request = ListUserGroupRequest.builder().page_size(50).build()
+        group_response = api_client.im.v1.chat.list(group_request)
+
+        if group_response.success() and group_response.data and group_response.data.items:
+            for chat in group_response.data.items:
+                chat_id = chat.chat_id
+                chat_name = chat.name or ""
+                logger.info("拉取群[%s]历史消息...", chat_name)
+                fetch_and_push_history(
+                    api_client,
+                    chat_id,
+                    chat_name,
+                    settings.aistock_api_url,
+                    settings.internal_token,
+                    days=3,
+                )
+        else:
+            logger.warning("获取群列表失败: %s", group_response.msg if not group_response.success() else "无群")
+    except Exception:
+        logger.exception("启动时拉取历史消息失败，继续启动 WebSocket")
+
+    logger.info("历史消息拉取完成，启动 WebSocket 长连接...")
+
     ws_client = WsClient(
         settings.app_id,
         settings.app_secret,
