@@ -11,9 +11,22 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import GetChatRequest, P2ImMessageReceiveV1
 
 from .downloader import download_message_resource
-from .analyzer import classify_file
+from .analyzer import classify_file, recognize_image_via_feishu
 
 logger = logging.getLogger(__name__)
+
+# ==================== 心跳文件 ====================
+
+_HEARTBEAT_FILE = "feishu_bot.heartbeat"
+
+def _write_heartbeat() -> None:
+    """更新心跳文件，记录最后一次活动时间"""
+    from datetime import datetime
+    try:
+        with open(_HEARTBEAT_FILE, "w") as f:
+            f.write(datetime.now().isoformat())
+    except Exception:
+        pass  # 心跳写入失败不应影响主流程
 
 # ==================== 股票代码/关键词提取 ====================
 
@@ -90,6 +103,35 @@ def _extract_text_from_post(content: Any) -> str:
 
     _walk(content)
     return " ".join(text_parts)
+
+
+def _ocr_images(
+    client: lark.Client,
+    image_paths: list,
+    enable_ocr: bool,
+) -> str:
+    """对下载的图片做 OCR，返回拼接后的文本。
+
+    Args:
+        client: lark.Client 实例
+        image_paths: 已下载的图片路径列表
+        enable_ocr: 是否启用 OCR
+
+    Returns:
+        所有图片 OCR 文本用 \\n 拼接的字符串，失败返回空字符串
+    """
+    if not enable_ocr or not image_paths:
+        return ""
+
+    all_text: list[str] = []
+    for img_path in image_paths:
+        if img_path is None:
+            continue
+        ocr_text = recognize_image_via_feishu(client, img_path)
+        if ocr_text:
+            all_text.append(ocr_text)
+
+    return "\n".join(all_text)
 
 
 def _push_to_backend(api_url: str, internal_token: str, payload: dict) -> bool:
@@ -224,9 +266,12 @@ def build_message_handler(
     aistock_api_url: str = "",
     internal_token: str = "",
     monitor_chat_name: str = "",
+    enable_ocr: bool = True,
 ):
     def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
         raw = _json_loads_maybe(lark.JSON.marshal(data))
+        # 每次收到消息都更新心跳
+        _write_heartbeat()
         event = _safe_get(raw, "event", {})
         message = _safe_get(event, "message", {})
         sender = _safe_get(event, "sender", {})
@@ -244,6 +289,9 @@ def build_message_handler(
         # 根据 message_id 去重，避免飞书重推事件导致重复下载
         if message_id and _is_duplicate(message_id):
             return
+
+        # 收集所有已下载的图片路径，用于后续 OCR
+        downloaded_images: list = []
 
         # 如果收到的是文件消息，并且文件名是 PDF，则自动下载到 DOWNLOAD_DIR。
         if download_pdf and message_type == "file" and isinstance(content, dict):
@@ -292,6 +340,8 @@ def build_message_handler(
                         resource_type="image",
                         allowed_types=None,
                     )
+                    if saved:
+                        downloaded_images.append(saved)
                     if saved and classify_keywords:
                         try:
                             classify_file(
@@ -324,6 +374,8 @@ def build_message_handler(
                             resource_type="image",
                             allowed_types=None,
                         )
+                        if saved:
+                            downloaded_images.append(saved)
                         if saved and classify_keywords:
                             try:
                                 classify_file(
@@ -359,28 +411,36 @@ def build_message_handler(
                 elif message_type == "post" and isinstance(content, dict):
                     text_content = _extract_text_from_post(content).strip()
 
-                if text_content and aistock_api_url:
-                    stock_codes = _extract_stock_codes(text_content)
-                    keywords = _extract_keywords(text_content)
+                # 对下载的图片做 OCR，将文字追加到 text_content
+                ocr_text = ""
+                if downloaded_images:
+                    ocr_text = _ocr_images(client, downloaded_images, enable_ocr)
+                    if ocr_text:
+                        text_content = f"{text_content}\n[OCR]{ocr_text}"[:2000]
+                        logger.info("图片OCR成功, 追加%d字符到text", len(ocr_text))
 
-                    if stock_codes or keywords:
-                        payload = {
-                            "source": "feishu",
-                            "chat_id": chat_id,
-                            "chat_name": chat_name,
-                            "message_id": message_id,
-                            "message_type": message_type,
-                            "text": text_content[:2000],
-                            "stock_codes": stock_codes,
-                            "keywords": keywords,
-                            "received_at": datetime.now().isoformat(),
-                        }
-                        logger.info(
-                            "飞书消息解析: stock_codes=%s keywords=%s",
-                            stock_codes,
-                            [k["keyword"] for k in keywords],
-                        )
-                        _push_to_backend(aistock_api_url, internal_token, payload)
+                # 从消息文本提取股票代码和关键词
+                stock_codes = _extract_stock_codes(text_content) if text_content else []
+                keywords = _extract_keywords(text_content) if text_content else []
+
+                if (stock_codes or keywords or ocr_text) and aistock_api_url:
+                    payload = {
+                        "source": "feishu",
+                        "chat_id": chat_id,
+                        "chat_name": chat_name,
+                        "message_id": message_id,
+                        "message_type": message_type,
+                        "text": text_content[:2000],
+                        "stock_codes": stock_codes,
+                        "keywords": keywords,
+                        "received_at": datetime.now().isoformat(),
+                    }
+                    logger.info(
+                        "飞书消息解析: stock_codes=%s keywords=%s",
+                        stock_codes,
+                        [k["keyword"] for k in keywords],
+                    )
+                    _push_to_backend(aistock_api_url, internal_token, payload)
         else:
             logger.info("当前不是群消息，已跳过群信息查询。")
 

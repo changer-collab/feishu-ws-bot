@@ -124,3 +124,50 @@ def classify_file(
     except Exception:
         logger.exception("文件移动失败: %s -> %s", file_path, dest_path)
         return None
+
+
+def recognize_image_via_feishu(client, image_path: Path) -> str:
+    """使用飞书 OCR API 识别图片中的文字。
+
+    Args:
+        client: lark.Client 实例（已配置 app_id/app_secret）
+        image_path: 图片文件路径
+
+    Returns:
+        识别出的文本（多行用 \\n 拼接），失败返回空字符串
+    """
+    import base64
+    from lark_oapi.api.optical_char_recognition.v1.model import (
+        BasicRecognizeImageRequest,
+        BasicRecognizeImageRequestBody,
+    )
+
+    try:
+        with open(str(image_path), "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        request = (
+            BasicRecognizeImageRequest.builder()
+            .request_body(
+                BasicRecognizeImageRequestBody.builder()
+                .image(image_b64)
+                .build()
+            )
+            .build()
+        )
+
+        response = client.optical_char_recognition.v1.image.basic_recognize(request)
+        if not response.success():
+            logger.warning(
+                "飞书OCR失败 code=%s msg=%s log_id=%s",
+                response.code,
+                response.msg,
+                response.get_log_id(),
+            )
+            return ""
+
+        text_list = response.data.text_list if response.data else []
+        return "\n".join(text_list)
+    except Exception:
+        logger.exception("飞书OCR异常: %s", image_path)
+        return ""

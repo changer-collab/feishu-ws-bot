@@ -1,10 +1,12 @@
 import logging
+import threading
 
 import lark_oapi as lark
 from lark_oapi.ws import Client as WsClient
 
 from feishu_bot.config import Settings
 from feishu_bot.handlers import build_message_handler
+from feishu_bot.watchdog import run_watchdog
 
 
 def setup_logging(level: str) -> None:
@@ -46,6 +48,7 @@ def main() -> None:
                 aistock_api_url=settings.aistock_api_url,
                 internal_token=settings.internal_token,
                 monitor_chat_name=settings.monitor_chat_name,
+                enable_ocr=settings.enable_ocr,
             )
         )
         .build()
@@ -53,6 +56,11 @@ def main() -> None:
 
     logger.info("启动飞书长连接机器人，ENV=%s", settings.env)
     logger.info("请确保开放平台已选择：事件与回调 -> 使用长连接接收事件，并订阅 im.message.receive_v1")
+
+    # 启动看门狗后台线程
+    watchdog_thread = threading.Thread(target=run_watchdog, daemon=True)
+    watchdog_thread.start()
+    logger.info("看门狗线程已启动")
 
     ws_client = WsClient(
         settings.app_id,
