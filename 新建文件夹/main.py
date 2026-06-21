@@ -48,6 +48,7 @@ def main() -> None:
                 aistock_api_url=settings.aistock_api_url,
                 internal_token=settings.internal_token,
                 monitor_chat_name=settings.monitor_chat_name,
+                enable_ocr=settings.enable_ocr,
             )
         )
         .build()

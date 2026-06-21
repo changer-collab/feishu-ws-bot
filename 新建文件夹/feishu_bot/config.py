@@ -34,6 +34,7 @@ class Settings:
     aistock_api_url: str = "https://gupiao-api.yaozhineng.com"
     internal_token: str = "crawler-int-2026-token"
     monitor_chat_name: str = ""
+    enable_ocr: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,4 +59,5 @@ class Settings:
             aistock_api_url=os.getenv("AISTOCK_API_URL", "https://gupiao-api.yaozhineng.com").strip().rstrip("/"),
             internal_token=os.getenv("INTERNAL_TOKEN", "crawler-int-2026-token").strip(),
             monitor_chat_name=os.getenv("MONITOR_CHAT_NAME", "").strip(),
+            enable_ocr=_env_bool("ENABLE_OCR", True),
         )
