@@ -15,6 +15,19 @@ from .analyzer import classify_file
 
 logger = logging.getLogger(__name__)
 
+# ==================== 心跳文件 ====================
+
+_HEARTBEAT_FILE = "feishu_bot.heartbeat"
+
+def _write_heartbeat() -> None:
+    """更新心跳文件，记录最后一次活动时间"""
+    from datetime import datetime
+    try:
+        with open(_HEARTBEAT_FILE, "w") as f:
+            f.write(datetime.now().isoformat())
+    except Exception:
+        pass  # 心跳写入失败不应影响主流程
+
 # ==================== 股票代码/关键词提取 ====================
 
 # A股代码模式：6位数字，0/3/6开头
@@ -227,6 +240,8 @@ def build_message_handler(
 ):
     def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
         raw = _json_loads_maybe(lark.JSON.marshal(data))
+        # 每次收到消息都更新心跳
+        _write_heartbeat()
         event = _safe_get(raw, "event", {})
         message = _safe_get(event, "message", {})
         sender = _safe_get(event, "sender", {})
