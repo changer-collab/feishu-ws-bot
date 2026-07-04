@@ -67,15 +67,48 @@ def check_heartbeat() -> bool:
     return True
 
 
+def check_heartbeat_loose() -> bool:
+    """非交易时段心跳检查（宽松阈值：2小时）"""
+    if not os.path.exists(HEARTBEAT_FILE):
+        return True
+
+    try:
+        with open(HEARTBEAT_FILE, "r") as f:
+            ts_str = f.read().strip()
+        last_active = datetime.fromisoformat(ts_str)
+    except (ValueError, OSError):
+        return True
+
+    now = datetime.now()
+    elapsed_minutes = (now - last_active).total_seconds() / 60
+
+    if elapsed_minutes > 120:  # 非交易时段2小时阈值
+        logger.error(
+            "非交易时段心跳过期: 最后活动 %s，已过 %.0f 分钟（阈值 120 分钟）",
+            last_active.isoformat(),
+            elapsed_minutes,
+        )
+        return False
+
+    return True
+
+
 def run_watchdog():
-    """看门狗主循环，每5分钟检查一次"""
+    """看门狗主循环，每5分钟检查一次（全天候）"""
     import time
-    logger.info("看门狗启动，检查间隔=5分钟，过期阈值=%d分钟", STALE_THRESHOLD_MINUTES)
+    logger.info("看门狗启动（全天候模式），检查间隔=5分钟，过期阈值=%d分钟", STALE_THRESHOLD_MINUTES)
     while True:
         time.sleep(300)  # 5分钟检查一次
         now = datetime.now()
+
+        # 非交易时段使用更宽松的阈值（2小时）
         if not _is_trading_hours(now):
+            if not check_heartbeat_loose():
+                logger.error("非交易时段心跳过期，强制退出进程！")
+                sys.exit(1)
             continue
+
+        # 交易时段使用严格阈值（30分钟）
         if not check_heartbeat():
-            logger.error("WebSocket 假死检测触发，强制退出进程！")
+            logger.error("交易时段WebSocket假死检测触发，强制退出进程！")
             sys.exit(1)

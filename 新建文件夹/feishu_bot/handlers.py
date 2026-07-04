@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import urllib.request
 import urllib.error
@@ -164,7 +165,28 @@ def _push_to_backend(api_url: str, internal_token: str, payload: dict) -> bool:
 
 # 已处理消息 ID 缓存，用于去重（避免飞书重推事件导致重复下载）
 _MAX_DEDUP_SIZE = 10000
+_PROCESSED_CACHE_FILE = "feishu_processed_ids.json"
+
+# 从文件加载已处理消息ID
 _processed_message_ids: OrderedDict[str, bool] = OrderedDict()
+if os.path.exists(_PROCESSED_CACHE_FILE):
+    try:
+        with open(_PROCESSED_CACHE_FILE, "r") as f:
+            ids = json.load(f)
+            for mid in ids:
+                _processed_message_ids[mid] = True
+        logger.info("从文件加载 %d 条已处理消息ID", len(_processed_message_ids))
+    except Exception:
+        logger.warning("加载已处理消息ID缓存失败，从空开始")
+
+
+def _save_processed_ids() -> None:
+    """将已处理消息ID保存到文件"""
+    try:
+        with open(_PROCESSED_CACHE_FILE, "w") as f:
+            json.dump(list(_processed_message_ids.keys()), f)
+    except Exception:
+        logger.warning("保存已处理消息ID缓存失败")
 
 
 def _is_duplicate(message_id: str) -> bool:
@@ -174,6 +196,7 @@ def _is_duplicate(message_id: str) -> bool:
     _processed_message_ids[message_id] = True
     if len(_processed_message_ids) > _MAX_DEDUP_SIZE:
         _processed_message_ids.popitem(last=False)
+    _save_processed_ids()
     return False
 
 
