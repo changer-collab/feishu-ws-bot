@@ -67,23 +67,29 @@ def main() -> None:
         from feishu_bot.history_fetcher import fetch_and_push_history
 
         # 获取机器人所在的群列表
-        from lark_oapi.api.im_v1 import ListUserGroupRequest
-        group_request = ListUserGroupRequest.builder().page_size(50).build()
+        from lark_oapi.api.im.v1 import ListChatRequest
+        group_request = ListChatRequest.builder().page_size(50).build()
         group_response = api_client.im.v1.chat.list(group_request)
 
         if group_response.success() and group_response.data and group_response.data.items:
+            # 只拉取监控群聊的历史消息
             for chat in group_response.data.items:
                 chat_id = chat.chat_id
                 chat_name = chat.name or ""
-                logger.info("拉取群[%s]历史消息...", chat_name)
-                fetch_and_push_history(
-                    api_client,
-                    chat_id,
-                    chat_name,
-                    settings.aistock_api_url,
-                    settings.internal_token,
-                    days=3,
-                )
+                # 只处理配置的监控群聊
+                if settings.monitor_chat_name and chat_name == settings.monitor_chat_name:
+                    logger.info("拉取监控群[%s]历史消息...", chat_name)
+                    fetch_and_push_history(
+                        api_client,
+                        chat_id,
+                        chat_name,
+                        settings.aistock_api_url,
+                        settings.internal_token,
+                        days=3,
+                    )
+                    break  # 找到目标群后跳出循环
+            if settings.monitor_chat_name:
+                logger.info("仅拉取监控群[%s]的历史消息，忽略其他群", settings.monitor_chat_name)
         else:
             logger.warning("获取群列表失败: %s", group_response.msg if not group_response.success() else "无群")
     except Exception:

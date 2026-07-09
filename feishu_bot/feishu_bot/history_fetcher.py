@@ -54,16 +54,17 @@ def fetch_group_history_messages(
 
     while has_more:
         try:
-            request = ListMessageRequest.builder() \
+            builder = ListMessageRequest.builder() \
                 .container_id_type("chat") \
                 .container_id(chat_id) \
                 .page_size(PAGE_SIZE) \
                 .start_time(str(start_time)) \
-                .direction("DESC")  # 从新到旧
+                .sort_type("ByCreateTimeDesc")  # 从新到旧排序
 
             if page_token:
-                request = request.page_token(page_token)
+                builder = builder.page_token(page_token)
 
+            request = builder.build()
             response = client.im.v1.message.list(request)
 
             if not response.success():
@@ -150,7 +151,8 @@ def fetch_and_push_history(
 
         # 构造 payload
         create_time = msg.get("create_time", "")
-        received_at = datetime.fromtimestamp(int(create_time)).isoformat() if create_time else datetime.now().isoformat()
+        # 飞书时间戳为毫秒，需转换为秒
+        received_at = datetime.fromtimestamp(int(create_time) / 1000).isoformat() if create_time else datetime.now().isoformat()
 
         payload = {
             "source": "feishu_history",

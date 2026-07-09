@@ -1,10 +1,11 @@
 """
-feishu-bot 看门狗：检测 WebSocket 假死并强制退出进程。
+feishu-bot 看门狗：检测 WebSocket 假死并强制退出进程，定期清理下载文件。
 
 工作原理：
 1. 读取心跳文件，检查最后活动时间
 2. 如果超过阈值（默认30分钟）无活动，且当前在交易时段，则 sys.exit(1)
 3. pm2 的 autorestart 会自动重启进程
+4. 每天凌晨清理 downloads 文件夹中3天前的图片
 
 交易时段定义（周一到周五）：
 - 上午: 09:15-11:35
@@ -15,12 +16,15 @@ feishu-bot 看门狗：检测 WebSocket 假死并强制退出进程。
 import logging
 import os
 import sys
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_FILE = "feishu_bot.heartbeat"
 STALE_THRESHOLD_MINUTES = 30
+DOWNLOADS_DIR = "downloads"
+CLEANUP_DAYS = 3  # 清理3天前的文件
 
 
 def _is_trading_hours(now: datetime) -> bool:
@@ -93,13 +97,91 @@ def check_heartbeat_loose() -> bool:
     return True
 
 
+def cleanup_old_downloads() -> int:
+    """
+    清理 downloads 文件夹中超过 CLEANUP_DAYS 天的文件。
+
+    Returns:
+        删除的文件数量
+    """
+    downloads_path = Path(DOWNLOADS_DIR)
+    if not downloads_path.exists():
+        logger.info("downloads 文件夹不存在，跳过清理")
+        return 0
+
+    cutoff_date = datetime.now() - timedelta(days=CLEANUP_DAYS)
+    deleted_count = 0
+
+    try:
+        for file_path in downloads_path.iterdir():
+            if not file_path.is_file():
+                continue
+
+            # 方法1：从文件名提取日期（前8位：YYYYMMDD）
+            filename = file_path.name
+            if len(filename) >= 8 and filename[:8].isdigit():
+                try:
+                    file_date = datetime.strptime(filename[:8], "%Y%m%d")
+                    if file_date < cutoff_date:
+                        logger.info("删除旧文件（文件名日期）：%s（%s）", filename, file_date.strftime("%Y-%m-%d"))
+                        file_path.unlink()
+                        deleted_count += 1
+                        continue
+                except ValueError:
+                    pass  # 文件名日期格式错误，继续用创建时间判断
+
+            # 方法2：使用文件创建时间（修改时间）
+            file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+            if file_mtime < cutoff_date:
+                logger.info("删除旧文件（修改时间）：%s（%s）", filename, file_mtime.strftime("%Y-%m-%d"))
+                file_path.unlink()
+                deleted_count += 1
+
+        if deleted_count > 0:
+            logger.info("downloads 清理完成：删除 %d 个文件，保留 %d 个", deleted_count, len(list(downloads_path.iterdir())))
+        else:
+            logger.debug("downloads 清理完成：无旧文件需要删除")
+
+    except Exception:
+        logger.exception("downloads 清理异常")
+
+    return deleted_count
+
+
+def should_cleanup() -> bool:
+    """
+    判断是否应该执行清理（每天凌晨一次）。
+
+    Returns:
+        True 表示应该清理
+    """
+    now = datetime.now()
+    # 每天凌晨 02:00-02:10 执行清理
+    return dt_time(2, 0) <= now.time() <= dt_time(2, 10)
+
+
 def run_watchdog():
-    """看门狗主循环，每5分钟检查一次（全天候）"""
+    """看门狗主循环，每5分钟检查一次（全天候），并定期清理旧文件"""
     import time
+
     logger.info("看门狗启动（全天候模式），检查间隔=5分钟，过期阈值=%d分钟", STALE_THRESHOLD_MINUTES)
+    logger.info("文件清理：每天凌晨02:00清理%d天前的downloads文件", CLEANUP_DAYS)
+
+    cleanup_done_today = False  # 标记当天是否已清理
+
     while True:
         time.sleep(300)  # 5分钟检查一次
         now = datetime.now()
+
+        # 重置清理标记（过了02:10后）
+        if now.time() > dt_time(2, 10):
+            cleanup_done_today = False
+
+        # 执行清理（凌晨02:00-02:10）
+        if should_cleanup() and not cleanup_done_today:
+            logger.info("开始执行 downloads 文件清理...")
+            cleanup_old_downloads()
+            cleanup_done_today = True
 
         # 非交易时段使用更宽松的阈值（2小时）
         if not _is_trading_hours(now):

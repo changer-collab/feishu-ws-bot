@@ -21,3 +21,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Runtime files (generated during execution)
+feishu_bot.heartbeat
+feishu_processed_ids.json
