@@ -9,4 +9,11 @@ services:
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       FETCH_CHAT_INFO: ${FETCH_CHAT_INFO:-true}
+      MONITOR_CHAT_NAME: ${MONITOR_CHAT_NAME:?请在 .env 中配置监控群名称}
+      AISTOCK_API_URL: ${AISTOCK_API_URL:?请在 .env 中配置业务后端地址}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?请在 .env 中配置内部接口令牌}
+      ENABLE_OCR: ${ENABLE_OCR:-true}
+      DOWNLOAD_PDF: ${DOWNLOAD_PDF:-true}
+      DOWNLOAD_IMAGE: ${DOWNLOAD_IMAGE:-true}
+      DOWNLOAD_DIR: ${DOWNLOAD_DIR:-downloads}
       ENV: huaweicloud

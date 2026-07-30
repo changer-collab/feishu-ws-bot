@@ -4,6 +4,7 @@ import os
 import re
 import urllib.request
 import urllib.error
+import urllib.parse
 from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Optional
@@ -56,17 +57,64 @@ for _dim_key, _keywords in KEYWORD_DIMENSIONS.items():
         _KEYWORD_TO_DIMENSION[_kw] = _dim_key
 
 
-def _extract_stock_codes(text: str) -> list[str]:
+_STOCK_NAME_MAP_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _load_stock_name_map(api_url: str) -> dict[str, str]:
+    """从现有股票列表接口只读加载“股票名称→代码”，进程内缓存。"""
+    base_url = api_url.rstrip("/")
+    if not base_url:
+        return {}
+    if base_url in _STOCK_NAME_MAP_CACHE:
+        return _STOCK_NAME_MAP_CACHE[base_url]
+
+    stock_name_map: dict[str, str] = {}
+    try:
+        page = 1
+        while True:
+            query = urllib.parse.urlencode({"page": page, "pageSize": 500})
+            url = f"{base_url}/api/cn/stocks?{query}"
+            with urllib.request.urlopen(url, timeout=20) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            data = result.get("data") or {}
+            for item in data.get("股票列表") or []:
+                name = str(item.get("股票简称") or "").strip()
+                code = str(item.get("股票代码") or "").strip()
+                if name and re.fullmatch(r"[036]\d{5}", code):
+                    stock_name_map[name] = code
+            total_pages = int(data.get("总页数") or 0)
+            if page >= total_pages:
+                break
+            page += 1
+        logger.info("股票名称映射加载完成: %d只", len(stock_name_map))
+    except Exception:
+        logger.exception("股票名称映射加载失败，暂时仅按代码识别")
+
+    _STOCK_NAME_MAP_CACHE[base_url] = stock_name_map
+    return stock_name_map
+
+
+def _extract_stock_codes(
+    text: str,
+    stock_name_map: Optional[dict[str, str]] = None,
+) -> list[str]:
     """从文本中提取A股代码"""
     codes = set()
+    valid_codes = set(stock_name_map.values()) if stock_name_map else None
     for m in _STOCK_NAME_CODE_PATTERN.finditer(text):
-        codes.add(m.group(1))
+        code = m.group(1)
+        if valid_codes is None or code in valid_codes:
+            codes.add(code)
     for m in _STOCK_CODE_PATTERN.finditer(text):
         code = m.group(1)
         # 过滤非A股代码（如日期、纯数字等）
-        if code[0] in ('0', '3', '6'):
+        if code[0] in ('0', '3', '6') and (valid_codes is None or code in valid_codes):
             codes.add(code)
-    return list(codes)
+    if stock_name_map:
+        for name in sorted(stock_name_map, key=len, reverse=True):
+            if name in text:
+                codes.add(stock_name_map[name])
+    return sorted(codes)
 
 
 def _extract_keywords(text: str) -> list[dict[str, str]]:
@@ -162,6 +210,7 @@ def _push_to_backend(api_url: str, internal_token: str, payload: dict) -> bool:
     except Exception:
         logger.exception("推送后端异常 url=%s", url)
         return False
+
 
 # 已处理消息 ID 缓存，用于去重（避免飞书重推事件导致重复下载）
 _MAX_DEDUP_SIZE = 10000
@@ -434,30 +483,36 @@ def build_message_handler(
                 elif message_type == "post" and isinstance(content, dict):
                     text_content = _extract_text_from_post(content).strip()
 
-                # 对下载的图片做 OCR，将文字追加到 text_content
+                # 对下载的图片做 OCR；正文仍走原字段，完整 OCR 单独保存。
                 ocr_text = ""
                 if downloaded_images:
                     ocr_text = _ocr_images(client, downloaded_images, enable_ocr)
                     if ocr_text:
-                        text_content = f"{text_content}\n[OCR]{ocr_text}"[:2000]
-                        logger.info("图片OCR成功, 追加%d字符到text", len(ocr_text))
+                        logger.info("图片OCR成功, 获取%d字符完整文本", len(ocr_text))
 
-                # 从消息文本提取股票代码和关键词
-                stock_codes = _extract_stock_codes(text_content) if text_content else []
-                keywords = _extract_keywords(text_content) if text_content else []
+                analysis_text = "\n".join(part for part in (text_content, ocr_text) if part)
+                stock_name_map = _load_stock_name_map(aistock_api_url)
+                stock_codes = (
+                    _extract_stock_codes(analysis_text, stock_name_map)
+                    if analysis_text
+                    else []
+                )
+                keywords = _extract_keywords(analysis_text) if analysis_text else []
+                payload = {
+                    "source": "feishu",
+                    "chat_id": chat_id,
+                    "chat_name": chat_name,
+                    "message_id": message_id,
+                    "message_type": message_type,
+                    "text": text_content[:2000],
+                    "ocr_text": ocr_text,
+                    "stock_codes": stock_codes,
+                    "keywords": keywords,
+                    "received_at": datetime.now().isoformat(),
+                }
 
-                if (stock_codes or keywords or ocr_text) and aistock_api_url:
-                    payload = {
-                        "source": "feishu",
-                        "chat_id": chat_id,
-                        "chat_name": chat_name,
-                        "message_id": message_id,
-                        "message_type": message_type,
-                        "text": text_content[:2000],
-                        "stock_codes": stock_codes,
-                        "keywords": keywords,
-                        "received_at": datetime.now().isoformat(),
-                    }
+                # 所有包含正文或 OCR 内容的群消息均入库；是否调用千问由后端决定。
+                if text_content or ocr_text:
                     logger.info(
                         "飞书消息解析: stock_codes=%s keywords=%s",
                         stock_codes,

@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -9,24 +10,33 @@ _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 _PDF_EXTS = {".pdf"}
 
 
-def _init_tesseract() -> None:
-    import pytesseract
+def _init_tesseract() -> bool:
+    try:
+        import pytesseract
+    except ImportError:
+        logger.info("未安装 pytesseract，文件分类的本地图片 OCR 将跳过；飞书 OCR API 不受影响。")
+        return False
+
     import shutil as _shutil
     if _shutil.which("tesseract"):
-        return
-    common_paths = [
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ]
-    for p in common_paths:
-        if Path(p).exists():
-            pytesseract.pytesseract.tesseract_cmd = p
-            logger.info("已自动配置 Tesseract 路径: %s", p)
-            return
-    logger.warning("未找到 Tesseract，图片 OCR 功能可能不可用。请确保已安装并加入 PATH。")
+        return True
+
+    if os.name == "nt":
+        common_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ]
+        for p in common_paths:
+            if Path(p).exists():
+                pytesseract.pytesseract.tesseract_cmd = p
+                logger.info("已自动配置 Tesseract 路径: %s", p)
+                return True
+
+    logger.info("未配置 Tesseract，文件分类的本地图片 OCR 将跳过；飞书 OCR API 不受影响。")
+    return False
 
 
-_init_tesseract()
+_TESSERACT_AVAILABLE = _init_tesseract()
 
 
 def extract_text_from_pdf(file_path: Path) -> str:
@@ -49,6 +59,9 @@ def extract_text_from_pdf(file_path: Path) -> str:
 
 
 def extract_text_from_image(file_path: Path) -> str:
+    if not _TESSERACT_AVAILABLE:
+        logger.debug("Tesseract 不可用，跳过文件分类图片 OCR: %s", file_path)
+        return ""
     try:
         import pytesseract
         from PIL import Image

@@ -1,0 +1,10 @@
+.env
+.env.example
+.venv/
+downloads/
+data/
+local_debug_output/
+*.heartbeat
+feishu_processed_ids.json
+__pycache__/
+*.pyc
