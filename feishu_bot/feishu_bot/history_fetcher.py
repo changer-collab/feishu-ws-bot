@@ -115,9 +115,16 @@ def fetch_and_push_history(
     Returns:
         成功推送的消息数
     """
-    from .handlers import _push_to_backend, _extract_stock_codes, _extract_keywords, _extract_text_from_post
+    from .handlers import (
+        _extract_keywords,
+        _extract_stock_codes,
+        _extract_text_from_post,
+        _load_stock_name_map,
+        _push_to_backend,
+    )
 
     messages = fetch_group_history_messages(client, chat_id, days)
+    stock_name_map = _load_stock_name_map(aistock_api_url)
     pushed = 0
 
     for msg in messages:
@@ -143,11 +150,8 @@ def fetch_and_push_history(
             continue
 
         # 提取股票代码和关键词
-        stock_codes = _extract_stock_codes(text_content) if text_content else []
+        stock_codes = _extract_stock_codes(text_content, stock_name_map) if text_content else []
         keywords = _extract_keywords(text_content) if text_content else []
-
-        if not (stock_codes or keywords):
-            continue
 
         # 构造 payload
         create_time = msg.get("create_time", "")
@@ -161,6 +165,7 @@ def fetch_and_push_history(
             "message_id": message_id,
             "message_type": message_type,
             "text": text_content[:2000],
+            "ocr_text": "",
             "stock_codes": stock_codes,
             "keywords": keywords,
             "received_at": received_at,
