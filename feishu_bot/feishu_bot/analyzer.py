@@ -1,6 +1,8 @@
 import logging
 import os
 import shutil
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -39,23 +41,81 @@ def _init_tesseract() -> bool:
 _TESSERACT_AVAILABLE = _init_tesseract()
 
 
-def extract_text_from_pdf(file_path: Path) -> str:
+@dataclass(frozen=True)
+class PdfTextContent:
+    """PDF 原生文本与逐页 OCR 文本。"""
+
+    text: str
+    ocr_text: str
+
+    @property
+    def combined_text(self) -> str:
+        return "\n".join(part for part in (self.text, self.ocr_text) if part).strip()
+
+
+def _extract_pdf_page_texts(file_path: Path) -> list[str]:
+    """读取 PDF 内嵌文字；失败时仍继续走 OCR。"""
     try:
         import pdfplumber
     except ImportError:
-        logger.warning("pdfplumber 未安装，无法提取 PDF 文本。请运行: pip install pdfplumber")
-        return ""
+        logger.warning("pdfplumber 未安装，跳过 PDF 内嵌文本提取: %s", file_path)
+        return []
 
-    text_parts: list[str] = []
     try:
         with pdfplumber.open(str(file_path)) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text() or ""
-                text_parts.append(page_text)
+            return [(page.extract_text() or "").strip() for page in pdf.pages]
     except Exception:
-        logger.exception("PDF 文本提取失败: %s", file_path)
+        logger.exception("PDF 内嵌文本提取失败，将继续尝试 OCR: %s", file_path)
+        return []
 
-    return "\n".join(text_parts)
+
+def _ocr_pdf_pages(file_path: Path) -> list[str]:
+    """将 PDF 的每一页渲染为图片，再使用本地 Tesseract 识别。"""
+    if not _TESSERACT_AVAILABLE:
+        logger.warning("Tesseract 不可用，无法对 PDF 执行 OCR: %s", file_path)
+        return []
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        logger.warning("未安装 PyMuPDF，无法渲染 PDF 页面进行 OCR: %s", file_path)
+        return []
+
+    resolution = max(100, int(os.getenv("PDF_OCR_DPI", "220")))
+    zoom = resolution / 72
+    page_texts: list[str] = []
+    try:
+        with fitz.open(str(file_path)) as document:
+            if document.needs_pass and not document.authenticate(""):
+                logger.warning("PDF 受密码保护，无法 OCR: %s", file_path)
+                return []
+            with tempfile.TemporaryDirectory(prefix="qq_pdf_ocr_") as temp_dir:
+                for page_index, page in enumerate(document):
+                    # 保存临时页面图像后复用现有的中文+英文 OCR 函数。
+                    image_path = Path(temp_dir) / f"page-{page_index + 1}.png"
+                    pixmap = page.get_pixmap(
+                        matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                    pixmap.save(str(image_path))
+                    page_text = extract_text_from_image(image_path).strip()
+                    page_texts.append(page_text)
+                    logger.info("PDF OCR 完成: %s 第 %d/%d 页，%d 字符",
+                                file_path.name, page_index + 1, len(document), len(page_text))
+    except Exception:
+        logger.exception("PDF 页面渲染或 OCR 失败: %s", file_path)
+        return []
+    return page_texts
+
+
+def extract_pdf_content(file_path: Path) -> PdfTextContent:
+    """逐页 OCR PDF，并保留内嵌文本以兼容可搜索 PDF。"""
+    embedded_text = "\n".join(part for part in _extract_pdf_page_texts(file_path) if part)
+    ocr_text = "\n".join(part for part in _ocr_pdf_pages(file_path) if part)
+    return PdfTextContent(text=embedded_text, ocr_text=ocr_text)
+
+
+def extract_text_from_pdf(file_path: Path) -> str:
+    """兼容旧调用：返回 PDF 内嵌文本与 OCR 文本的合并结果。"""
+    return extract_pdf_content(file_path).combined_text
 
 
 def extract_text_from_image(file_path: Path) -> str:
@@ -94,6 +154,7 @@ def classify_file(
     keywords: list[str],
     target_subdir: str,
     base_dir: str,
+    text: Optional[str] = None,
 ) -> Optional[Path]:
     """提取文件文本，若包含任一关键词则移动到 base_dir/target_subdir/ 下。
 
@@ -103,7 +164,7 @@ def classify_file(
     if not keywords:
         return None
 
-    text = extract_text(file_path)
+    text = text if text is not None else extract_text(file_path)
     if not text:
         return None
 

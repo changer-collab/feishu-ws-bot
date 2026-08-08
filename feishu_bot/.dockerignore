@@ -2,9 +2,13 @@
 .venv/
 downloads/
 data/
+tests/
+docs/
 local_debug_output/
 *.heartbeat
 feishu_processed_ids.json
 qq_processed_ids.json
 __pycache__/
 *.pyc
+.git
+.superpowers/

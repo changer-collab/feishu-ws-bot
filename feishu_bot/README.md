@@ -100,3 +100,24 @@ DOWNLOAD_DIR=/app/downloads
 - `im:message` / `im:message:readonly`
 - `im:resource`
 - 如果读取群消息，还需要群消息相关权限，并确保机器人已经被添加到该群。
+
+## 5. QQ 群 PDF 捕获模式
+
+当 `.env` 中 `QQ_ENABLE=true` 时，程序进入 QQ/OneBot 捕获模式（`feishu_bot.onebot` 模块），飞书侧不再启动：程序作为反向 WebSocket 服务端（默认 `0.0.0.0:8081`），等待 NapCat 等 OneBot 11 协议端连接，被动接收群文件事件与轮询群文件列表，下载 PDF 并推送后端。
+
+关键配置项（见 `.env.example`）：
+
+```env
+QQ_ENABLE=true
+ONEBOT_WS_HOST=0.0.0.0
+ONEBOT_WS_PORT=8081
+QQ_GROUP_ID=目标QQ群号            # 必填
+QQ_HISTORY_DAYS=7               # 启动时补拉最近 N 天群文件
+QQ_FILE_POLL_INTERVAL=900       # 群文件轮询间隔（秒）
+QQ_STATE_PATH=qq_processed_ids.json   # 去重状态文件（Docker 建议挂载持久卷）
+DOWNLOAD_DIR=downloads          # 下载文件目录
+```
+
+- NapCat 登录**必须使用小号**，存在协议号封号风险；机器人仅被动接收/下载，不主动发消息。
+- Docker 一键部署（NapCat + 机器人）与本地 Windows 运行步骤见 [deploy/qq/README.md](deploy/qq/README.md)。
+- 回滚：`QQ_ENABLE=false` 即恢复纯飞书模式，onebot 模块不影响现有流程。
